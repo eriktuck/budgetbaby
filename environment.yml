@@ -1,0 +1,18 @@
+name: asclepias
+channels:
+  - conda-forge
+dependencies:
+  - ipykernel
+  - pandas
+  - ca-certificates
+  - openssl
+  - dash
+  - dash-bootstrap-components
+  - dash-ag-grid
+  - seaborn
+  - certifi
+  - matplotlib
+  - pip:
+    - dash-daq
+    - monarchmoney
+    

@@ -1,0 +1,35 @@
+# Python-related files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+*.env
+*.venv
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+notebooks/
+
+# Dash-related files
+*.log
+
+# Data directory
+data/
+
+# Pickle files
+*.pkl
+*.pickle
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# IDE-specific files
+.vscode/
+.idea/
+*.swp
+*.swo
