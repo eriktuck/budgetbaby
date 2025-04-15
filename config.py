@@ -9,10 +9,22 @@ import pandas as pd
 from datetime import datetime as dt
 from io import StringIO
 import uuid
+import pickle
+import base64
 
 from lib.utils import functions
 
 CONFIG_FILE = "data/config.json"
+
+def pickle_and_encode(obj):
+    pickled = pickle.dumps(obj)
+    encoded = base64.b64encode(pickled).decode('utf-8')  # convert bytes to UTF-8 string
+    return encoded
+
+def decode_and_unpickle(encoded_str):
+    decoded = base64.b64decode(encoded_str)
+    obj = pickle.loads(decoded)
+    return obj
 
 # Populate use_case_dropdown options
 with open(CONFIG_FILE, 'r') as file:
@@ -184,7 +196,8 @@ def store_config(dummy):
     [Output("login-modal", "is_open"), 
      Output("transaction-modal", "is_open"),
      Output("login-status", "children"),
-     Output('transaction-data-store', 'data', allow_duplicate=True)],
+     Output('transaction-data-store', 'data', allow_duplicate=True),
+     Output('monarch-session-store', 'data')],
     [Input("open-modal-button", "n_clicks"),
      Input("close-login-modal-button", "n_clicks"),
      Input("close-transaction-modal-button", "n_clicks"),
@@ -194,121 +207,80 @@ def store_config(dummy):
      State("password-input", "value"),
      State("date-picker-range", "start_date"),
      State("date-picker-range", "end_date"),
-     State('transaction-data-store', 'data')],
+     State('transaction-data-store', 'data'),
+     State('monarch-session-store', 'data')],
     prevent_initial_call=True,
 )
 def manage_and_handle_modals(
     open_clicks, close_login_clicks, close_transaction_clicks, 
     login_clicks, fetch_clicks, username, password, start_date, end_date, 
-    existing_data
+    stored_transaction_data, session_data
 ):
     """
     Manages modal states and functionality.
-
+    
     Launches modal on open-modal-button click. If a user session is 
-    found (a monarch money session pickled in ./mm), the transactions
-    modal is shown. If not, the login modal is shown. Successful login
+    found in session storage, the transactions modal is shown. 
+    If not, the login modal is shown. Successful login
     triggers the transactions modal.
 
     User selects a date range and fetches transactions. Existing
     transactions are updated by truncating existing transactions in the
     date range selected and appending fetched transactions. Raw 
     transaction data are stored in transaction-data-store.
-
-    Parameters
-    ----------
-    open_clicks: int
-        Number of clicks on open-modal-button
-    close_login_clicks: int
-        Number of clicks on close-login-modal
-    close_transaction_clicks: int
-        Number of clicks on close-transactions-modal 
-    login_clicks: int
-        Number of clicks on login-button
-    fetch_clicks: int
-        Number of clicks on fetch-button 
-    username: str
-        User provided username (expects email)
-    password: str
-        User provided password
-    start_date: str
-        Start date selected (or current selection)
-    end_date: str
-        End date selected (or current end date)
-    existing_data: str
-        JSON-serialized transaction data
-
-    Returns
-    -------
-    bool
-        Open (or close) login modal
-    bool
-        Open (or close) transactions modal
-    str
-        Message to display for login success or failure
-    str
-        JSON-serialized transactions data as updated
     """
     ctx = dash.callback_context
 
     if not ctx.triggered:
-        return False, False, "", existing_data  # Default: Both modals closed, no status message
+        return False, False, "", stored_transaction_data, session_data
 
     triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
 
-    # Handle the "Fetch" button to open the appropriate modal
-    if triggered_id == "open-modal-button":
-        mm = MonarchMoney()
-        try:
-            mm.load_session()
-            # If session exists, open the transaction modal
-            return False, True, "", existing_data
-        except Exception:
-            # If session does not exist, open the login modal
-            return True, False, "", existing_data
-
-    # Handle the close buttons for each modal
+    # Close the modal
     if triggered_id == "close-login-modal-button":
-        return False, False, "", existing_data  # Close login modal
+        return False, False, "", stored_transaction_data, session_data
     if triggered_id == "close-transaction-modal-button":
-        return False, False, "", existing_data  # Close transaction modal
+        return False, False, "", stored_transaction_data, session_data
+    
+    # Check for existing session and open appropriate modal
+    if triggered_id == "open-modal-button":
+        if session_data:
+            mm = decode_and_unpickle(session_data)
+            try:
+                # Validate session is still active
+                asyncio.run(mm.get_accounts())
+                return False, True, "", stored_transaction_data, session_data
+            except:
+                # Session expired, need to login again
+                return True, False, "", stored_transaction_data, None
+        else:
+            # No session exists, open the login modal
+            return True, False, "", stored_transaction_data, None
 
-    # Handle the login button
+    # No saved session: login with username and password from login modal
     if triggered_id == "login-button":
         if not username or not password:
-            return True, False, "Please enter both username and password.", existing_data
-
+            return True, False, "Please enter both username and password.", stored_transaction_data, None
         
         async def login_to_monarch(email, password):
             mm = MonarchMoney()
             mm._headers['Device-UUID'] = '98d6a448-4798-437f-9927-950f643da374'
             
             try:
-                await mm.login(email=email, password=password)
-                mm.save_session()
-                return True
-            # except RequireMFAException:
-            #     await mm.multi_factor_authenticate(email, password, code)
-            #     mm.save_session()
-            #     return True
+                await mm.login(email=email, password=password, 
+                               use_saved_session=False, save_session=False)
+                # Pickle and store session data
+                print("LOGIN SUCCESSFUL")
+                return False, True, "", stored_transaction_data, pickle_and_encode(mm)
             except Exception as e:
-                return f"Login failed: {str(e)}"
+                print(f"Login failed: {str(e)}")
+                return True, False, f"Login failed: {str(e)}", stored_transaction_data, None
 
-        login_result = asyncio.run(login_to_monarch(username, password))
-
-        if login_result is True:
-            # Login successful
-            return False, True, "", existing_data
-        else:
-            # Login failed
-            return True, False, login_result, existing_data
+        return asyncio.run(login_to_monarch(username, password))
     
     # Handle the fetch button
     if triggered_id == "fetch-button":
-        async def fetch_transactions(start_date, end_date):
-            mm = MonarchMoney()
-            mm.load_session()
-            
+        async def fetch_transactions(mm, start_date, end_date):
             # Await the get_transactions call
             transactions = await mm.get_transactions(start_date=start_date, end_date=end_date, limit=None)
             
@@ -320,21 +292,26 @@ def manage_and_handle_modals(
             return transactions
 
         try:
-            # Fetch transactions for selected dates         
-            transactions = asyncio.run(fetch_transactions(start_date, end_date))
+            if not session_data:
+                raise Exception("No valid session found")
+
+            # Fetch transactions for selected dates
+            mm = decode_and_unpickle(session_data)      
+            transactions = asyncio.run(fetch_transactions(mm, start_date, end_date))
 
             # Update existing transactions with new transactions
             start_date = dt.fromisoformat(start_date)
             end_date = dt.fromisoformat(end_date)
-            existing_transactions = pd.read_json(StringIO(existing_data), orient='split')
+            existing_transactions = pd.read_json(StringIO(stored_transaction_data), orient='split')
+            
+            # Update transactions and store in transaction-data-store
             transactions = functions.update_transactions(existing_transactions, transactions, start_date, end_date, save=True)
 
-            return False, False, "", transactions.to_json(date_format='iso', orient='split')
+            return False, False, "", transactions.to_json(date_format='iso', orient='split'), session_data
         
         except Exception as e:
             print(f"Failed to fetch transactions: {str(e)}")
+            return False, True, "", stored_transaction_data, session_data
 
-            return False, True, "", existing_data
-
-    # Default: Both modals closed
-    return False, False, "", existing_data
+    # # Default: Both modals closed
+    # return False, False, "", stored_transaction_data, session_data

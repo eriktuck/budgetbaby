@@ -18,7 +18,8 @@ app.layout = html.Div([
     dash.page_container,
     dcc.Store(id='config-store', storage_type="session", data={"trigger": True}),
     dcc.Store(id='transaction-data-store'),
-    dcc.Store(id='transaction-subset-store')
+    dcc.Store(id='transaction-subset-store'),
+    dcc.Store(id='monarch-session-store', storage_type="session")
 ])
 
 if __name__ == '__main__':
