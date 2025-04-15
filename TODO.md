@@ -26,8 +26,10 @@ Design Inspo
 
 ### Next Up
 
--   Check 
--   Add 
+-   [ ] Work with GPT to deploy to Cloud Run
+
+
+
 -   Add in tax burden to withdrawals so we can cover expenses plus taxes
 -   Add in RMD checks (no switching logic yet, just flag when RMDs are not met)
 -   Add a portfolio for the house and allocate business net revenue as income?

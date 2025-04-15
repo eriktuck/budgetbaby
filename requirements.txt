@@ -1,0 +1,8 @@
+pandas
+dash
+dash-bootstrap-components
+dash-ag-grid
+certifi
+matplotlib
+dash-daq
+monarchmoney
