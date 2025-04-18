@@ -36,6 +36,10 @@ Design Inspo
 
 
 
+https://huggingface.co/kuro-08/bert-transaction-categorization
+
+
+
 Goals
 
 -   Use Cursor and/or Windsurf and/or Claude Code to support development and learn these tools

@@ -6,12 +6,12 @@ LOGO = 'https://images.vexels.com/media/users/3/126959/isolated/preview/0000ff7c
 navbar = dbc.NavbarSimple(
     id="navbar",
     children=[
-        dbc.NavItem(dbc.NavLink("Actual", href="/")),
-        dbc.NavItem(dbc.NavLink("Budget", href="/budget")),
-        dbc.NavItem(dbc.NavLink("CSP", href="/csp")),
+        dbc.NavItem(dbc.NavLink("Actual", href="/dash/")),
+        dbc.NavItem(dbc.NavLink("Budget", href="/dash/budget")),
+        dbc.NavItem(dbc.NavLink("CSP", href="/dash/csp")),
         dbc.DropdownMenu(
             children=[
-                dbc.DropdownMenuItem("Trends", href="/trends"),
+                dbc.DropdownMenuItem("Trends", href="/dash/trends"),
                 dbc.DropdownMenuItem("Page 3", href="#"),
             ],
             nav=True,
@@ -20,7 +20,7 @@ navbar = dbc.NavbarSimple(
         ),
     ],
     brand="Milkweed",
-    brand_href="/",
+    brand_href="/dash/",
     color="primary",
     dark=True,
 )

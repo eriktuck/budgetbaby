@@ -16,4 +16,6 @@ dependencies:
   - pip:
     - dash-daq
     - monarchmoney
+    - firebase-admin
+    - python-dotenv
     

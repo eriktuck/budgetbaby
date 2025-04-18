@@ -6,3 +6,5 @@ certifi
 matplotlib
 dash-daq
 monarchmoney
+firebase-admin
+python-dotenv

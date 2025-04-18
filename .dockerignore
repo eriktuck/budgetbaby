@@ -14,15 +14,12 @@ env/
 .ipynb_checkpoints/
 notebooks/
 
-# Dash-related files
-*.log
+# # Data directory
+# data/
 
-# Data directory
-data/
-
-# Pickle files
-*.pkl
-*.pickle
+# # Pickle files
+# *.pkl
+# *.pickle
 
 # OS-specific files
 .DS_Store
@@ -40,3 +37,13 @@ Thumbs.db
 # Secrets
 .env
 firebase-service-account.json
+
+# Git
+.git
+.gitignore
+
+# Markdown 
+*.md
+
+# Tests
+tests/
