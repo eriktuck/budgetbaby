@@ -6,19 +6,16 @@ import os
 import dash
 from dash import Dash, html, dcc
 import dash_bootstrap_components as dbc
+from firebase_admin import firestore
 
 from navbar import navbar
 from config import config
 
-load_dotenv()
+load_dotenv(dotenv_path="secrets/env-file")
 
 # Init Flask
 server = Flask(__name__)
 server.secret_key = os.getenv("FLASK_SECRET_KEY", "super-secret")
-
-# Init Firebase
-cred = credentials.Certificate("firebase-service-account.json")
-firebase_admin.initialize_app(cred)
 
 external_stylesheets = [dbc.themes.MINTY]
 
@@ -75,5 +72,5 @@ def logout():
     return redirect(url_for("index"))
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    app.run(host="0.0.0.0", port=8080, debug=False)
 

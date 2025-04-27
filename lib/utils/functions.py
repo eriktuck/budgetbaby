@@ -5,65 +5,159 @@ import os
 import pandas as pd
 import plotly.graph_objects as go
 import glob
+import pytz
+from flask import session
 
-FILE_NAME = 'raw-transactions.pkl'
-
-def read_transactions(file_name=FILE_NAME):
-    """reads transactions from file"""
-    transactions = pd.read_pickle(os.path.join('data', file_name))
-
-    return transactions
-
-
-def update_transactions(existing_transactions, new_transactions, 
-                        start_date, end_date, save=False):
-    filt = (
-        (existing_transactions['date'] >= start_date) & 
-        (existing_transactions['date'] <= end_date)
-    )
-    filtered_transactons = existing_transactions.loc[~filt]
-    combined_transactions = pd.concat([filtered_transactons, new_transactions])
-    combined_transactions = combined_transactions.sort_values('date', ascending=False)
-
-    if save:
-        combined_transactions.to_pickle(f"./data/{FILE_NAME}")
-
-    return combined_transactions
-
-
-def process_transactions(df, config, user):
-    # Get config settings
-    user_config = config["users"][user]
-    category_names = config['cat_names']
-    csp_from_group = user_config['csp_from_group']
-    csp_from_category = user_config['csp_from_category']
-    csp_labels = user_config['csp_labels']
-    account_owner = config['account_owner']
-
-    # Extract data from dictionary columns
-    df['category_name'] = df['category'].apply(lambda x: x['name'])
-    df['category_group'] = df['category_name'].map(category_names)
-    df['account_name'] = df['account'].apply(lambda x: x['displayName'])
-
-    # Drop categories
-    drop_cats = user_config['drop_cats']
-    filt = (df['category_name'].isin(drop_cats)) | (df['hideFromReports'] == True)
-    df = df.loc[~filt]
-
-    # Remap categories for CSP and set label (e.g., income, fixed)
+def process_transactions(df, config):
+    category_names = config["cat_names"]
+    csp_from_group = config["csp_from_group"]
+    csp_from_category = config["csp_from_category"]
+    csp_labels = config["csp_labels"]
+    drop_cats = config["drop_cats"]
+    
+    # Assign labels
+    df["category_group"] = df["category_name"].map(category_names)
     df = df.assign(
-        csp_from_group=df['category_group'].map(csp_from_group),
-        csp_from_category=df['category_name'].map(csp_from_category),
-        csp=lambda x: x['csp_from_group'].fillna(x['csp_from_category']).fillna('guilt_free'),
-        csp_label=lambda x: x['csp'].map(csp_labels),
-        account_owner=df['account_name'].replace(account_owner)
+        csp_from_group=df["category_group"].map(csp_from_group),
+        csp_from_category=df["category_name"].map(csp_from_category),
+        csp=lambda x: x["csp_from_group"].fillna(x["csp_from_category"]).fillna("guilt_free"),
+        csp_label=lambda x: x["csp"].map(csp_labels)
     )
 
-    # Subset transactions by account_owner 
-    filt = df['account_owner'] == user #TODO
-    df = df.loc[filt, :]
+    # Drop transactions
+    df = df.loc[~df["category_name"].isin(drop_cats) & ~df["hideFromReports"]]
 
     return df
+
+
+def find_household_for_user(db, uid):
+    households_ref = db.collection("households")
+    query = households_ref.where("members", "array_contains", uid).limit(1)
+    docs = query.stream()
+    
+    for doc in docs:
+        return doc.id  # first (and only) match
+    
+    return None
+
+
+
+def update_transactions(db, existing_transactions, new_transactions, 
+                         start_date, end_date, config_json):
+    """
+    Update Firestore by replacing transactions for a given date range.
+
+    Parameters
+    ----------
+    existing_transactions : pd.DataFrame
+        Current loaded transactions.
+    new_transactions : pd.DataFrame
+        New Monarch transactions to process.
+    start_date : datetime
+        Start date for filtering.
+    end_date : datetime
+        End date for filtering.
+    config_json : dict
+        Configuration settings.
+
+    Returns
+    -------
+    pd.DataFrame
+        Updated combined transactions.
+    """
+    utc = pytz.UTC
+    start_date = start_date.replace(tzinfo=utc)
+    end_date = end_date.replace(tzinfo=utc)
+    
+    uid = session.get("user_id")
+    if not uid:
+        raise ValueError("Error: User not logged in.")
+    
+    config = json.loads(config_json)
+
+    # Find the user config by matching uid
+    user_config = None
+    user_name = None
+
+    for name, user_data in config["users"].items():
+        if user_data.get("uid") == uid:
+            user_config = user_data
+            user_name = name
+            break
+
+    if user_config is None or user_name is None:
+        raise ValueError("Error: No matching user config found for this UID.")
+    
+    household_config = config["users"].get("joint")
+
+    if user_config is None:
+        raise ValueError(f"Error: No user config found for {user_name}")
+
+    if household_config is None:
+        raise ValueError("Error: No household config found for 'joint'")
+
+    # Step 1: Prepare new_transactions
+    new_transactions["category_name"] = new_transactions["category"].apply(lambda x: x.get("name", "") if isinstance(x, dict) else "")
+    new_transactions["account_name"] = new_transactions["account"].apply(lambda x: x.get("displayName", "") if isinstance(x, dict) else "")
+
+    account_owner_map = config.get("account_owner", {})
+
+    # Get accounts where the owner matches the user
+    user_accounts = [acct for acct, owner in account_owner_map.items() if owner == user_name]
+    household_accounts = [acct for acct, owner in account_owner_map.items() if owner == "joint"]
+
+    # Which transactions belong where
+    is_user_txn = new_transactions["account_name"].isin(user_accounts)
+    is_joint_txn = new_transactions["account_name"].isin(household_accounts)
+
+    # Split
+    user_txns = new_transactions.loc[is_user_txn].copy()
+    joint_txns = new_transactions.loc[is_joint_txn].copy()
+
+    # Process separately
+    user_txns = process_transactions(user_txns, user_config)
+    joint_txns = process_transactions(joint_txns, household_config)
+
+    user_txns["account_owner"] = name
+    joint_txns["account_owner"] = "joint"
+
+    # Step 2: Delete old transactions from Firestore
+
+    # Define collection refs
+    user_ref = db.collection("users").document(uid).collection("transactions")
+    household_id = find_household_for_user(db, uid)
+    household_ref = db.collection("households").document(household_id).collection("transactions")
+
+    # Filter old transactions
+    filt = (existing_transactions['date'] >= start_date) & (existing_transactions['date'] <= end_date)
+    old_txns = existing_transactions.loc[filt]
+
+    # Identify which ones belong to user vs joint
+    old_user_txn_ids = old_txns.loc[old_txns['account_owner'] == user_config.get("name", "user"), "id"].tolist()
+    old_joint_txn_ids = old_txns.loc[old_txns['account_owner'] == "joint", "id"].tolist()
+
+    # Delete them
+    batch = db.batch()
+    for txn_id in old_user_txn_ids:
+        batch.delete(user_ref.document(str(txn_id)))
+    for txn_id in old_joint_txn_ids:
+        batch.delete(household_ref.document(str(txn_id)))
+    batch.commit()
+
+    # Step 3: Upload new ones
+    batch = db.batch()
+    for txn in user_txns.drop(columns=["category", "account", "merchant"], errors="ignore").to_dict(orient="records"):
+        batch.set(user_ref.document(str(txn["id"])), txn)
+    for txn in joint_txns.drop(columns=["category", "account", "merchant"], errors="ignore").to_dict(orient="records"):
+        batch.set(household_ref.document(str(txn["id"])), txn)
+    batch.commit()
+
+    # Step 4: Update local combined dataset
+    filtered_transactions = existing_transactions.loc[~filt]
+    updated_transactions = pd.concat([filtered_transactions, user_txns, joint_txns])
+    updated_transactions = updated_transactions.sort_values('date', ascending=False)
+
+    return updated_transactions
 
 
 def read_budget(config, user):
@@ -100,10 +194,15 @@ def calc_proportions(df):
 
 
 def build_budget_report(transactions, budget, start_date, end_date, config, user):
+    # Ensure start_date and end_date are timezone-aware in UTC
+    utc = pytz.UTC
+    start_date = start_date.replace(tzinfo=utc)
+    end_date = end_date.replace(tzinfo=utc)
     # Subset transactions by date
     filt = (
         (transactions['date'] >= start_date) & 
-        (transactions['date'] <= end_date)
+        (transactions['date'] <= end_date) &
+        (transactions['account_owner'] == user)
     )
     transactions = transactions.loc[filt, :]
 

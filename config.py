@@ -11,14 +11,15 @@ from io import StringIO
 import uuid
 import pickle
 import base64
+from flask import session
 
+from firebase import db
 from lib.utils import functions
 
-CONFIG_FILE = "data/config.json"
 
 def pickle_and_encode(obj):
     pickled = pickle.dumps(obj)
-    encoded = base64.b64encode(pickled).decode('utf-8')  # convert bytes to UTF-8 string
+    encoded = base64.b64encode(pickled).decode('utf-8')
     return encoded
 
 def decode_and_unpickle(encoded_str):
@@ -26,22 +27,11 @@ def decode_and_unpickle(encoded_str):
     obj = pickle.loads(decoded)
     return obj
 
-# Populate use_case_dropdown options
-with open(CONFIG_FILE, 'r') as file:
-    CONFIG = json.load(file)
-
-user_keys = list(CONFIG["users"].keys())
-use_case_options = [
-    {'label': user.title(), 'value': user}
-    for user in user_keys
-    ]
-use_case_value = user_keys[0]
 
 ### UI COMPONENTS ###
 use_case_dropdown = dcc.Dropdown(
     id='use-case',
-    options = use_case_options,
-    value=use_case_value,
+    placeholder='Select user',
     clearable=False
 )
 
@@ -173,24 +163,143 @@ config = html.Div(
 
 @callback(
     Output('config-store', 'data'),
-    Input('navbar', 'id')  # Dummy input to fire on load
+    Input('navbar', 'id')  # dummy input to fire on load
 )
 def store_config(dummy):
     """
-    Store config file for selected user in browser memory.
-
-    Parameters
-    ----------
-    dummy: str
-        dummy input to fire callback on page load 
+    Store combined user and household config in browser memory.
 
     Returns
     -------
     str
-        JSON-serialized config file
+        JSON-serialized config object with structure like local config.json
     """
-    return json.dumps(CONFIG)
+    uid = session.get("user_id")
+    if not uid:
+        raise ValueError("Error: User not found")
 
+    # Find the household where the user is a member
+    matching = (
+        db.collection("households")
+          .where("members", "array_contains", uid)
+          .limit(1)
+          .stream()
+    )
+    household_doc = next(matching, None)
+    if household_doc is None:
+        raise ValueError("Error: User not assigned to a household")
+    
+    household_data = household_doc.to_dict()
+    household_id = household_doc.id
+    members = household_data.get("members", [])
+
+    # Helper to fetch budgets
+    def fetch_budgets(ref):
+        budgets = {}
+        budget_docs = ref.collection("budgets").stream()
+        for doc in budget_docs:
+            year, month = doc.id.split("-")
+            year_dict = budgets.setdefault(year, {})
+            year_dict[int(month)] = doc.to_dict()
+        return budgets
+
+    config = {
+        "users": {},
+        "group_names": {},
+        "cat_names": {},
+        "account_owner": {}  # <-- Add account_owner mapping!
+    }
+
+    # Household (joint) budgets and settings
+    household_budgets = fetch_budgets(db.collection("households").document(household_id))
+    config["users"]["joint"] = {
+        "uid": "joint",
+        "budget": household_budgets,
+        "drop_cats": household_data.get("drop_cats", []),
+        "csp_from_group": household_data.get("csp_from_group", {}),
+        "csp_from_category": household_data.get("csp_from_category", {}),
+        "csp_labels": household_data.get("csp_labels", {}),
+        "cat_order": household_data.get("cat_order", []),
+        "group_names": household_data.get("group_names", {}),
+        "cat_names": household_data.get("cat_names", {}),
+        "accounts": household_data.get("accounts", [])
+    }
+
+    # Household accounts → owner is 'joint'
+    for acct in household_data.get("accounts", []):
+        config["account_owner"][acct] = "joint"
+
+    # Individual budgets and settings
+    for member_id in members:
+        user_ref = db.collection("users").document(member_id)
+        user_doc = user_ref.get()
+        if not user_doc.exists:
+            continue
+
+        user_data = user_doc.to_dict()
+        username = user_data.get("name", member_id)
+
+        # Save group_names and cat_names once
+        if not config["group_names"]:
+            config["group_names"] = user_data.get("group_names", {})
+        if not config["cat_names"]:
+            config["cat_names"] = user_data.get("cat_names", {})
+
+        user_budgets = fetch_budgets(user_ref)
+
+        config["users"][username] = {
+            "uid": member_id,
+            "budget": user_budgets,
+            "drop_cats": user_data.get("drop_cats", []),
+            "csp_from_group": user_data.get("csp_from_group", {}),
+            "csp_from_category": user_data.get("csp_from_category", {}),
+            "csp_labels": user_data.get("csp_labels", {}),
+            "cat_order": user_data.get("cat_order", []),
+            "group_names": user_data.get("group_names", {}),
+            "cat_names": user_data.get("cat_names", {}),
+            "accounts": user_data.get("accounts", [])
+        }
+
+        # User accounts → owner is username
+        for acct in user_data.get("accounts", []):
+            config["account_owner"][acct] = username
+
+    return json.dumps(config)
+
+
+
+@callback(
+    Output('use-case', 'options'),
+    Output('use-case', 'value'),
+    Input('config-store', 'data'),
+    prevent_initial_call=True
+)
+def populate_use_case_dropdown(config):
+    """
+    Populate the use-case dropdown from config.
+
+    Parameters
+    ----------
+    config : str
+        JSON string of config from `config-store`.
+
+    Returns
+    -------
+    list[dict], str
+        Dropdown options, default value
+    """
+    if not config:
+        raise dash.exceptions.PreventUpdate
+
+    config = json.loads(config)
+    user_keys = list(config.get("users", {}).keys())
+
+    # Create options for each user + add 'joint'
+    options = [{'label': user.title(), 'value': user} for user in user_keys]
+    if 'joint' not in user_keys:
+        options.append({'label': 'Joint', 'value': 'joint'})
+
+    return options, options[0]["value"] if options else None
 
 @callback(
     [Output("login-modal", "is_open"), 
@@ -205,16 +314,17 @@ def store_config(dummy):
      Input("fetch-button", "n_clicks")],
     [State("username-input", "value"), 
      State("password-input", "value"),
-     State("date-picker-range", "start_date"),
-     State("date-picker-range", "end_date"),
+     State("transaction-date-picker", "start_date"),
+     State("transaction-date-picker", "end_date"),
      State('transaction-data-store', 'data'),
-     State('monarch-session-store', 'data')],
+     State('monarch-session-store', 'data'),
+     State('config-store', 'data')],
     prevent_initial_call=True,
 )
 def manage_and_handle_modals(
     open_clicks, close_login_clicks, close_transaction_clicks, 
     login_clicks, fetch_clicks, username, password, start_date, end_date, 
-    stored_transaction_data, session_data
+    stored_transaction_data, session_data, config_json
 ):
     """
     Manages modal states and functionality.
@@ -286,7 +396,10 @@ def manage_and_handle_modals(
             
             # Convert to dataframe
             transactions = pd.DataFrame(transactions['allTransactions']['results'])
-            transactions['date'] = pd.to_datetime(transactions['date'])
+            transactions['date'] = pd.to_datetime(transactions['date'], utc=True)
+
+            print(f'{len(transactions)} new transactions fetched from {transactions['date'].min()} to\
+                  {transactions['date'].max()}')
 
             # Return results
             return transactions
@@ -297,17 +410,22 @@ def manage_and_handle_modals(
 
             # Fetch transactions for selected dates
             mm = decode_and_unpickle(session_data)      
-            transactions = asyncio.run(fetch_transactions(mm, start_date, end_date))
+            new_transactions = asyncio.run(fetch_transactions(mm, start_date, end_date))
 
             # Update existing transactions with new transactions
+            existing_transactions = pd.read_json(StringIO(stored_transaction_data), orient='split')
             start_date = dt.fromisoformat(start_date)
             end_date = dt.fromisoformat(end_date)
-            existing_transactions = pd.read_json(StringIO(stored_transaction_data), orient='split')
-            
-            # Update transactions and store in transaction-data-store
-            transactions = functions.update_transactions(existing_transactions, transactions, start_date, end_date, save=True)
 
-            return False, False, "", transactions.to_json(date_format='iso', orient='split'), session_data
+            # Update transactions and store in transaction-data-store
+            transactions = functions.update_transactions(
+                db, existing_transactions, new_transactions, 
+                start_date, end_date, config_json)
+            
+            print(transactions.iloc[0])
+            
+            transactions_json = transactions.to_json(date_format='iso', orient='split')
+            return False, False, "", transactions_json, session_data
         
         except Exception as e:
             print(f"Failed to fetch transactions: {str(e)}")

@@ -3,12 +3,13 @@ from dash import html, dcc, callback, Input, Output, State, ctx
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from datetime import datetime as dt
+from flask import session
 import json
 import pandas as pd
 from io import StringIO
 from dateutil.relativedelta import relativedelta
 
-
+from firebase import db
 from lib.utils import functions
 
 dash.register_page(__name__, path='/')
@@ -101,10 +102,12 @@ layout = html.Div([
                     dbc.Card(
                         dbc.CardBody(
                             dcc.Loading(
-                                children=dcc.Graph(
-                                    id='budget-chart',
-                                    config={'displayModeBar': False}),
-                                type='circle'
+                                id="budget-chart-loading",
+                                type="circle",
+                                children=html.Div(
+                                    id='budget-chart-container',
+                                    children=html.P("Loading transactions...")
+                                )
                             )
                         ),
                         className="pt-3"
@@ -125,77 +128,61 @@ layout = html.Div([
 ### CALLBACKS ###
 @callback(
     Output('transaction-data-store', 'data'),
-    [Input('config-store', 'data')])
-def upload_transactions(config):  # file_contents, file_name, 
-    """
-	Store user-specific transactions in browser memory.
-	
-	User connects to Monarch and selects transactions within a specified 
-    date range. Raw data are stored in dcc.Store.
-
-    #TODO: currently implemented as local file, will be API.
-	
-	Parameters
-	----------
-    config: str
-        JSON-serialized configuration file for the user
-    contents: blob
-	    Currently a transactions object. #TODO
-    filename: str
-        Currently the name of the file uploaded. #TODO 
-	
-	Returns
-	-------
-	Str
-	    JSON serialized dictionary of transactions
-
-    Notes
-    -----
-    For upload-transactions file picker, use
-        [Input('upload-transactions', 'contents')],
-        [State('upload-transactions', 'filename')]
-	"""    
-    transactions = functions.read_transactions()
-
-    return transactions.to_json(date_format='iso', orient='split')
-
-
-@callback(
-    Output('transaction-subset-store', 'data'),
-    Input('use-case', 'value'),
-    Input('transaction-data-store', 'data'),
-    State('config-store', 'data')
+    Input('config-store', 'data')
 )
-def store_subsetted_transactions(user, transactions_data, config):
+def upload_transactions(config_json):
     """
-	Process raw transactions based on user config.
-	
-	Stores transformed data in browser memory.
-	
-	Parameters
-	----------
-    user: str
-        User name from select filter
-    transaction_data: str
-        JSON-serialized transaction data
-    config: str
-        JSON-serialized configuration file for the user
-	
-	Returns
-	-------
-	Str
-	    JSON-serialized dictionary of transactions
-	"""
-    # Read config
-    config = json.loads(config)
-    
-    # Read stored transactions
-    transactions = pd.read_json(StringIO(transactions_data), orient='split')
-    
-    # Process transactions
-    transactions = functions.process_transactions(transactions, config, user)
+    Store user + household transactions in browser memory at page load.
 
-    return transactions.to_json(date_format='iso', orient='split')
+    Parameters
+    ----------
+    config_json : str
+        JSON-serialized configuration file for the user (already loaded separately).
+
+    Returns
+    -------
+    str
+        JSON-serialized Pandas DataFrame containing all transactions.
+    """
+    uid = session.get("user_id")
+    if not uid:
+        raise ValueError("Error: User not found")
+
+    # Find household where user is a member
+    household_query = (
+        db.collection("households")
+        .where("members", "array_contains", uid)
+        .limit(1)
+        .stream()
+    )
+    household_doc = next(household_query, None)
+    if not household_doc:
+        raise ValueError("Error: User not assigned to a household")
+
+    household_id = household_doc.id
+
+    all_txns = []
+
+    # Helper to fetch and label transactions
+    def fetch_transactions(collection_ref, owner_name):
+        for txn_doc in collection_ref.stream():
+            txn = txn_doc.to_dict()
+            txn["account_owner"] = owner_name
+            all_txns.append(txn)
+
+    # Personal transactions
+    user_doc = db.collection("users").document(uid).get()
+    user_name = user_doc.to_dict().get("name", "user") if user_doc.exists else "user"
+    fetch_transactions(db.collection("users").document(uid).collection("transactions"), user_name)
+
+    # Household transactions
+    fetch_transactions(db.collection("households").document(household_id).collection("transactions"), "joint")
+
+    # Return empty DataFrame if no transactions
+    if not all_txns:
+        return pd.DataFrame().to_json(date_format="iso", orient="split")
+
+    return pd.DataFrame(all_txns).to_json(date_format="iso", orient="split")
 
 
 @callback(
@@ -298,14 +285,13 @@ def adjust_date_range(back_clicks, forward_clicks, start_date, end_date,
 
 
 @callback(
-    [Output('budget-chart', 'figure'),
-     Output('budget-chart', 'clickData')],
-    [Input('transaction-subset-store', 'data'),
+    Output('budget-chart-container', 'children'),
+    [Input('transaction-data-store', 'data'),
      Input('date-picker-range', 'start_date'),
-     Input('date-picker-range', 'end_date')],
-    [State('config-store', 'data'),
-     State('use-case', 'value')])
-def update_plot(transactions_data, start_date, end_date, config, user):
+     Input('date-picker-range', 'end_date'),
+     Input('use-case', 'value')],
+    [State('config-store', 'data')])
+def update_plot(transactions_data, start_date, end_date, user, config):
     """
 	Create or update budget chart.
 	
@@ -328,7 +314,7 @@ def update_plot(transactions_data, start_date, end_date, config, user):
 	    Budget chart
     None
         Resets the clickData property of the budget chart
-	"""
+	"""    
     # Read config
     config = json.loads(config)
     
@@ -346,20 +332,37 @@ def update_plot(transactions_data, start_date, end_date, config, user):
     budget_report = functions.build_budget_report(
         transactions, budget, start_date, end_date, config, user)
     
+    if budget_report['amount'].abs().sum() == 0:
+        return html.P("No transactions found.")
+    
     # Update chart
     fig = functions.plot_report(budget_report, start_date, end_date)
 
-    return fig, None
+    return dcc.Graph(
+        id='budget-chart',
+        figure=fig,
+        config={'displayModeBar': False}
+    )
 
+
+@callback(
+    Output('budget-chart', 'clickData'),
+    Input('budget-chart', 'figure'),
+    prevent_initial_call=True
+)
+def clear_clickdata_on_update(fig):
+    return None
 
 @callback(
     Output('transaction_table', 'children'),
     [Input('budget-chart', 'clickData')],
-    [State('transaction-subset-store', 'data'),
+    [State('transaction-data-store', 'data'),
      State('date-picker-range', 'start_date'),
-     State('date-picker-range', 'end_date')]
+     State('date-picker-range', 'end_date'),
+     State('use-case', 'value')]
 )
-def update_table(clickData, transactions_data, start_date, end_date):
+def update_table(clickData, transactions_data, start_date, end_date,
+                 user):
     """
 	Show transactions table for clicked transaction category.
 	
@@ -387,21 +390,24 @@ def update_table(clickData, transactions_data, start_date, end_date):
         transactions = pd.read_json(StringIO(transactions_data), orient='split')
         
         if category == 'Total Spending':
-            filt = filt = (
+            filt = (
                 (transactions['date'] >= start_date) &
                 (transactions['date'] <= end_date) &
+                (transactions['account_owner'] == user) &
                 (transactions['csp_label'] != 'income')
             )
         elif category == 'Total Income':
             filt = (
                 (transactions['date'] >= start_date) &
                 (transactions['date'] <= end_date) &
+                (transactions['account_owner'] == user) &
                 (transactions['csp_label'] == 'income')
             )
         else:
             filt = (
                 (transactions['date'] >= start_date) &
                 (transactions['date'] <= end_date) & 
+                (transactions['account_owner'] == user) &
                 (transactions['csp'] == category)
             )
         transactions = transactions.loc[filt]

@@ -38,5 +38,6 @@ Thumbs.db
 .mm/
 
 # Secrets
+secrets/
 .env
 firebase-service-account.json

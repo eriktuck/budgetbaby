@@ -1,0 +1,46 @@
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore Git files
+.git/
+.gitignore
+
+# Ignore local development files
+.env
+secrets/
+firebase-service-account.json
+*.pkl
+*.db
+
+# Ignore Docker local files
+docker-compose.yml
+Dockerfile.local
+
+# Ignore editor settings
+.vscode/
+.idea/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore any backup or temporary files
+*.swp
+*.bak
+*.tmp
+
+# Ignore tests if you don't want to deploy them
+tests/
+scripts/
+
+# Pickle files
+*.pkl
+*.pickle
+
+# Monarch money
+.mm/
+
+# Markdown 
+*.md

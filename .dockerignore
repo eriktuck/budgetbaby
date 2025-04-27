@@ -18,8 +18,8 @@ notebooks/
 # data/
 
 # # Pickle files
-# *.pkl
-# *.pickle
+*.pkl
+*.pickle
 
 # OS-specific files
 .DS_Store
@@ -35,6 +35,7 @@ Thumbs.db
 .mm/
 
 # Secrets
+secrets/
 .env
 firebase-service-account.json
 
@@ -45,5 +46,6 @@ firebase-service-account.json
 # Markdown 
 *.md
 
-# Tests
+# Tests and Scripts
 tests/
+scripts/
