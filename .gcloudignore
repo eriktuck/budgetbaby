@@ -44,3 +44,6 @@ scripts/
 
 # Markdown 
 *.md
+
+# PS1
+*.ps1

@@ -14,8 +14,8 @@ env/
 .ipynb_checkpoints/
 notebooks/
 
-# # Data directory
-# data/
+# Data directory
+data/
 
 # # Pickle files
 *.pkl
@@ -49,3 +49,6 @@ firebase-service-account.json
 # Tests and Scripts
 tests/
 scripts/
+
+# PS1
+*.ps1
