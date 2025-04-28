@@ -14,8 +14,11 @@ from config import config
 # Load environment variables from Secret Manager content (if available)
 secrets_env_content = os.getenv("SECRETS_ENV")
 if secrets_env_content:
-    # Use dotenv_values to parse the string content as a .env file
-    env_vars_from_secret = dotenv_values(stream=secrets_env_content.splitlines())
+    env_vars_from_secret = {}
+    for line in secrets_env_content.splitlines():
+        if "=" in line:
+            key, value = line.strip().split("=", 1)
+            env_vars_from_secret[key] = value
     firebase_api_key = env_vars_from_secret.get("FIREBASE_API_KEY")
     firebase_auth_domain = env_vars_from_secret.get("FIREBASE_AUTH_DOMAIN")
     firebase_project_id = env_vars_from_secret.get("FIREBASE_PROJECT_ID")
