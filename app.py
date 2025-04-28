@@ -11,7 +11,8 @@ from firebase_admin import firestore
 from navbar import navbar
 from config import config
 
-load_dotenv(dotenv_path="secrets/env-file")
+dotenv_path = os.path.join("secrets", "env-file")
+load_dotenv(dotenv_path=dotenv_path)
 
 # Init Flask
 server = Flask(__name__)
@@ -71,6 +72,6 @@ def logout():
     session.clear()
     return redirect(url_for("index"))
 
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=8080, debug=False)
+# if __name__ == '__main__':
+#     app.run(host="0.0.0.0", port=8080, debug=False)
 
