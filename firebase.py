@@ -7,7 +7,7 @@ if not firebase_admin._apps:
     try:
         cred = credentials.Certificate(
             os.path.join("secrets", 
-                        "firebase-service-account.json"
+                        "firebase-service-account"
                         ))
         firebase_admin.initialize_app(cred)
     except:
