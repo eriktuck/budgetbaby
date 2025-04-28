@@ -17,3 +17,6 @@ steps:
     - --allow-unauthenticated
     - --set-secrets=SECRETS_ENV=env-file:latest,FIREBASE_CREDENTIALS=firebase-service-account:latest
     - --set-env-vars=GOOGLE_CLOUD_PROJECT=$PROJECT_ID,ENV_PATH=/secrets/.env,FIREBASE_CREDENTIALS=/secrets/firebase-service-account.json
+
+options:
+  logging: CLOUD_LOGGING_ONLY
