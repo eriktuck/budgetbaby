@@ -1,5 +1,5 @@
 from flask import Flask, request, session, render_template, redirect, url_for
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 import firebase_admin
 from firebase_admin import credentials, auth
 import os
@@ -11,8 +11,23 @@ from firebase_admin import firestore
 from navbar import navbar
 from config import config
 
-dotenv_path = os.path.join("secrets", "env-file")
-load_dotenv(dotenv_path=dotenv_path)
+# Load environment variables from Secret Manager content (if available)
+secrets_env_content = os.getenv("SECRETS_ENV")
+if secrets_env_content:
+    # Use dotenv_values to parse the string content as a .env file
+    env_vars_from_secret = dotenv_values(stream=secrets_env_content.splitlines())
+    firebase_api_key = env_vars_from_secret.get("FIREBASE_API_KEY")
+    firebase_auth_domain = env_vars_from_secret.get("FIREBASE_AUTH_DOMAIN")
+    firebase_project_id = env_vars_from_secret.get("FIREBASE_PROJECT_ID")
+    firebase_app_id = env_vars_from_secret.get("FIREBASE_APP_ID")
+else:
+    # Fallback to loading from a local file (for local development)
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=os.path.join("secrets", "env-file"))
+    firebase_api_key = os.getenv("FIREBASE_API_KEY")
+    firebase_auth_domain = os.getenv("FIREBASE_AUTH_DOMAIN")
+    firebase_project_id = os.getenv("FIREBASE_PROJECT_ID")
+    firebase_app_id = os.getenv("FIREBASE_APP_ID")
 
 # Init Flask
 server = Flask(__name__)
@@ -46,11 +61,12 @@ app.layout = protected_layout
 # Routes
 @server.route("/")
 def index():
-    return render_template("index.html",
-        firebase_api_key=os.environ["FIREBASE_API_KEY"],
-        firebase_auth_domain=os.environ["FIREBASE_AUTH_DOMAIN"],
-        firebase_project_id=os.environ["FIREBASE_PROJECT_ID"],
-        firebase_app_id=os.environ["FIREBASE_APP_ID"]
+    return render_template(
+        "index.html",
+        firebase_api_key=firebase_api_key,
+        firebase_auth_domain=firebase_auth_domain,
+        firebase_project_id=firebase_project_id,
+        firebase_app_id=firebase_app_id,
     )
 
 @server.route("/login", methods=["POST"])
